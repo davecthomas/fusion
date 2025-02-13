@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Any, List, Dict
-from openai import openai
+
+# file: embedding.py
+
+from abc import ABC, abstractmethod
+from typing import Any, List, Dict
 
 ###############################################################################
 #                            ABSTRACT BASE CLASSES
@@ -9,13 +13,13 @@ from openai import openai
 
 class EmbeddingBase(ABC):
     """
-    Abstract base class for all embedding classes.
+    Abstract base class for all embedding classes (text, numeric, category, etc.).
     """
 
     @abstractmethod
     def embed(self, value: Any) -> List[float]:
         """
-        Take a raw value (text, numeric, category, etc.) and return a numeric vector.
+        Legacy single-value embedding interface (still used by numeric/category).
         """
         pass
 
@@ -23,12 +27,23 @@ class EmbeddingBase(ABC):
 class TextEmbedderBase(EmbeddingBase):
     """
     Abstract base class for text embedding.
+
+    Adds single & batch text embedding interfaces:
+      - embed_single(text)
+      - embed_batch(texts)
     """
 
     @abstractmethod
-    def embed(self, text: str) -> List[float]:
+    def embed_single(self, text: str) -> List[float]:
         """
-        Return the text embedding for the given text.
+        Return the text embedding for the given string (single input).
+        """
+        pass
+
+    @abstractmethod
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """
+        Return a list of embeddings for a list of input strings.
         """
         pass
 
@@ -36,67 +51,101 @@ class TextEmbedderBase(EmbeddingBase):
 ###############################################################################
 #                            TEXT EMBEDDING CLASSES
 ###############################################################################
+import time
+from typing import List
+
+from openai import OpenAI
+from openai import RateLimitError, BadRequestError, OpenAIError
+from openai.types import EmbeddingCreateParams, CreateEmbeddingResponse
 
 
-class OpenAITextEmbedder(TextEmbedderBase):
+class OpenAITextEmbedder:
     """
-    Text embedding using the OpenAI Embeddings API.
+    Text embedding using the newer OpenAI.embeddings.create(...) API
+    with batch support and a cascaded retry/backoff logic.
     """
 
-    def __init__(self, model_name: str, api_key: str):
+    def __init__(
+        self, embedding_model: str, api_key: str, backoff_delays: List[int] = None
+    ):
         """
-        model_name: Name of the OpenAI embedding model, e.g., "text-embedding-ada-002"
-        api_key: The OpenAI API key
+        :param embedding_model: e.g., "text-embedding-ada-002" (1536 dimensions)
+        :param api_key: OpenAI API key
+        :param backoff_delays: A list of retry delay intervals in seconds.
+                               e.g. [1, 2, 4] means 1s, then 2s, then 4s if failures recur.
         """
-        self.model_name = model_name
+        self.embedding_model = embedding_model
         self.api_key = api_key
+        self.backoff_delays = backoff_delays or [1, 2, 4]
+        self.client = OpenAI(api_key=self.api_key)
 
-        # Set the global OpenAI API key (you could also store it locally if you prefer)
-        openai.api_key = self.api_key
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """
+        Takes a list of input strings and returns a list of embeddings
+        (one embedding list per string). If using "text-embedding-ada-002",
+        each embedding will be 1536 floats.
 
-    def embed(self, text: str) -> List[float]:
+        Retries on RateLimitError, BadRequestError, and other OpenAIError using
+        the specified backoff delays.
         """
-        Uses OpenAI's Embedding API to generate embeddings for the given text.
-        For large-scale usage, consider handling exceptions, retries, rate-limits, etc.
-        """
-        response = openai.Embedding.create(model=self.model_name, input=text)
-        # OpenAI returns: response["data"][0]["embedding"]
-        embedding = response["data"][0]["embedding"]
-        # Convert the embedding to a standard Python list (it may already be a list, but just to be sure)
-        return list(embedding)
+        params: EmbeddingCreateParams = {
+            "input": texts,  # List of input texts
+            "model": self.embedding_model,  # e.g. "text-embedding-ada-002"
+        }
 
+        max_retries = len(self.backoff_delays)
+        attempt = 0
 
-class HuggingFaceTextEmbedder(TextEmbedderBase):
-    """
-    Text embedding using a Hugging Face Transformer model.
-    (Requires installing transformers, e.g., `pip install transformers torch`)
-    """
+        while attempt < max_retries:
+            try:
+                response: CreateEmbeddingResponse = self.client.embeddings.create(
+                    **params
+                )
+                # Extract embeddings from the response
+                embeddings = [item.embedding for item in response.data]
+                return embeddings
 
-    def __init__(self, model_name: str):
-        """
-        model_name: Hugging Face model name, e.g., "sentence-transformers/all-MiniLM-L6-v2"
-        """
-        self.model_name = model_name
-        # You could load the model/tokenizer here, e.g.:
-        # from transformers import AutoTokenizer, AutoModel
-        # self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        # self.model = AutoModel.from_pretrained(self.model_name)
-        # For brevity, we'll skip the actual loading in this example.
+            except RateLimitError as e:
+                # Hit rate limit - wait and retry
+                if attempt < max_retries - 1:
+                    delay = self.backoff_delays[attempt]
+                    print(f"RateLimitError: {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                    attempt += 1
+                else:
+                    raise e
 
-    def embed(self, text: str) -> List[float]:
+            except BadRequestError as e:
+                # The request was invalid (400). Possibly fix the request if feasible.
+                if attempt < max_retries - 1:
+                    delay = self.backoff_delays[attempt]
+                    print(f"BadRequestError: {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                    attempt += 1
+                else:
+                    raise e
+
+            except OpenAIError as e:
+                # Catch-all for other OpenAI-related issues
+                if attempt < max_retries - 1:
+                    delay = self.backoff_delays[attempt]
+                    print(f"OpenAIError: {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                    attempt += 1
+                else:
+                    raise e
+
+    def embed_single(self, text: str) -> List[float]:
         """
-        Runs text through a Hugging Face model and returns a list of floats.
+        Convenience method for a single text. Reuses embed_batch.
+        Returns a single embedding (list of floats) or raises if empty.
         """
-        # Example (pseudo-code):
-        # inputs = self.tokenizer(text, return_tensors="pt")
-        # outputs = self.model(**inputs)
-        # last_hidden_state = outputs.last_hidden_state
-        # pooling to get sentence embedding, e.g., mean pooling:
-        # embedding_tensor = last_hidden_state.mean(dim=1).squeeze()
-        # embedding = embedding_tensor.detach().numpy().tolist()
-        #
-        # For demonstration, let's assume we've done it and return a dummy:
-        return [0.1, 0.2, 0.3, 0.4]  # Example placeholder
+        results = self.embed_batch([text])
+        if results:
+            return results[0]
+        else:
+            # This theoretically shouldn't happen unless 'data' was empty
+            raise ValueError("No embedding returned for single input.")
 
 
 ###############################################################################
@@ -107,7 +156,7 @@ class HuggingFaceTextEmbedder(TextEmbedderBase):
 class EmbeddingFactory:
     """
     Factory for creating text embedders based on a config dict.
-    Extend this to handle multiple providers (OpenAI, Hugging Face, etc.).
+    Extend this to handle multiple providers (OpenAI, Titan, etc.).
     """
 
     @staticmethod
@@ -126,12 +175,6 @@ class EmbeddingFactory:
             model_name = config.get("model_name", "text-embedding-ada-002")
             api_key = config["api_key"]  # Must be provided
             return OpenAITextEmbedder(model_name, api_key)
-
-        elif provider == "huggingface":
-            model_name = config.get(
-                "model_name", "sentence-transformers/all-MiniLM-L6-v2"
-            )
-            return HuggingFaceTextEmbedder(model_name)
 
         else:
             raise ValueError(f"Unsupported provider: {provider}")

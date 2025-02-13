@@ -1,7 +1,7 @@
 # file: database.py
 
 import snowflake.connector
-from typing import Dict, List
+from typing import Any, Dict, List
 from appconfig import AppConfig
 
 
