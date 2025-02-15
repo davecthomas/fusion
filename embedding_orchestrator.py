@@ -9,9 +9,10 @@ class EmbeddingOrchestrator:
     """
     Handles embedding of single-level dictionaries/JSON objects by:
       1) Using a map of field -> embedder type (or some default/inference),
-      2) Collecting each field's embedding,
-      3) Concatenating them into a final fused embedding,
-      4) Returning a FusionResult with metadata.
+      2) Optionally ignoring specified fields (e.g. user_id) for embedding,
+      3) Collecting each field's embedding,
+      4) Concatenating them into a final fused embedding,
+      5) Returning a FusionResult with metadata.
     """
 
     def __init__(
@@ -19,24 +20,33 @@ class EmbeddingOrchestrator:
         embedder_map: Dict[str, EmbeddingBase],
         field_type_map: Dict[str, str] = None,
         default_type: str = "text",
+        list_no_embed_fields: List[str] = None,
     ):
         """
-        :param embedder_map: e.g. { "text": <TextEmbedder>, "numeric": <NumericEmbedder>, "category": <CategoryEmbedder> }
-        :param field_type_map: A dict of field_name -> type_label (e.g., { "description": "text", "price": "numeric" })
-        :param default_type: If a field isn't in field_type_map, we can default to "text" or some other embedder type.
+        :param embedder_map: A dictionary mapping embedder labels to embedder instances,
+                             e.g. { "text": <TextEmbedder>, "numeric": <NumericEmbedder>, "category": <CategoryEmbedder> }.
+        :param field_type_map: A dictionary mapping field names to embedder labels,
+                               e.g. { "description": "text", "price": "numeric" }.
+        :param default_type: If a field isn't in field_type_map, default to this embedder label.
+        :param list_no_embed_fields: A list of field names for which no embedding should be created.
         """
         self.embedder_map = embedder_map
         self.field_type_map = field_type_map or {}
         self.default_type = default_type
+        self.list_no_embed_fields = list_no_embed_fields or []
 
     def generate_embedding(self, data: Dict[str, Any]) -> FusionResult:
         """
-        Generates a FusionResult from a single-level dict (database row or JSON).
+        Generates a FusionResult from a single-level dictionary (database row or JSON).
+        Fields listed in self.list_no_embed_fields are ignored (i.e., no embedding is created).
         """
         component_embeddings: Dict[str, List[float]] = {}
 
-        # 1) For each field, determine the embedder and embed its value
+        # Process each field in the data that is not in the ignore list.
         for field, value in data.items():
+            if field in self.list_no_embed_fields:
+                continue
+
             embed_type = self.field_type_map.get(field, self.default_type)
             embedder = self.embedder_map.get(embed_type)
             if not embedder:
@@ -45,12 +55,13 @@ class EmbeddingOrchestrator:
             field_embedding = embedder.embed(value)
             component_embeddings[field] = field_embedding
 
-        # 2) Concatenate in the order of the fields to form the fused vector
-        fusion_embedding = []
+        # Concatenate embeddings in the order of fields (skipping ignored ones)
+        fusion_embedding: List[float] = []
         for field in data.keys():
+            if field in self.list_no_embed_fields:
+                continue
             fusion_embedding.extend(component_embeddings[field])
 
-        # 3) Build a FusionResult object
         return FusionResult(
             original_data=data,
             component_embeddings=component_embeddings,

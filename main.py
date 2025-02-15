@@ -479,12 +479,43 @@ def main():
     df_manhattan = pd.DataFrame(list_dict_manhattan)
     df_cosine = pd.DataFrame(list_dict_cosine)
 
-    print("\n--- Euclidean Distances ---")
-    print(df_euclid)
-    print("\n--- Manhattan Distances ---")
-    print(df_manhattan)
-    print("\n--- Cosine Similarities ---")
-    print(df_cosine)
+    # Normalize Euclidean distance (0 = farthest, 1 = closest)
+    if not df_euclid.empty:
+        max_euclid = df_euclid["euclidean"].max()
+        df_euclid["similarity_score"] = 1 - (df_euclid["euclidean"] / max_euclid)
+        # df_euclid = df_euclid.sort_values("similarity_score", ascending=False)
+
+    # Normalize Manhattan distance (0 = farthest, 1 = closest)
+    if not df_manhattan.empty:
+        max_manhattan = df_manhattan["manhattan"].max()
+        df_manhattan["similarity_score"] = 1 - (
+            df_manhattan["manhattan"] / max_manhattan
+        )
+        # df_manhattan = df_manhattan.sort_values("similarity_score", ascending=False)
+
+    # Normalize cosine similarity (already in [-1, 1], map to [0, 1])
+    df_cosine["similarity_score"] = (df_cosine["cosine_similarity"] + 1) / 2.0
+    # df_cosine = df_cosine.sort_values("similarity_score", ascending=False)
+
+    # Rename similarity_score columns to avoid overlap
+    df_euclid.rename(columns={"similarity_score": "euclid_score"}, inplace=True)
+    df_manhattan.rename(columns={"similarity_score": "manhattan_score"}, inplace=True)
+    df_cosine.rename(columns={"similarity_score": "cosine_score"}, inplace=True)
+
+    # Merge all three dataframes
+    df_merged = df_euclid.merge(
+        df_manhattan[["user_id_a", "user_id_b", "manhattan", "manhattan_score"]],
+        on=["user_id_a", "user_id_b"],
+        how="outer",
+    )
+    df_all = df_merged.merge(
+        df_cosine[["user_id_a", "user_id_b", "cosine_similarity", "cosine_score"]],
+        on=["user_id_a", "user_id_b"],
+        how="outer",
+    )
+
+    # Save the merged dataframe to CSV
+    df_all.to_csv("combined_similarity.csv", index=False)
 
 
 if __name__ == "__main__":
