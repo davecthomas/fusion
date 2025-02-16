@@ -24,6 +24,17 @@ class EmbeddingBase(ABC):
         pass
 
 
+class BooleanEmbedder(EmbeddingBase):
+    """
+    Boolean embedding as a single dimension:
+      - True  -> [1.0]
+      - False -> [0.0]
+    """
+
+    def embed(self, value: Any) -> List[float]:
+        return [1.0] if bool(value) else [0.0]
+
+
 class TextEmbedderBase(EmbeddingBase):
     """
     Abstract base class for text embedding.

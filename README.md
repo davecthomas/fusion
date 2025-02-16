@@ -1,5 +1,11 @@
 # Multi-Modal Fusion Embedding System
 
+A flexible, multi-modal embedding system that can:
+
+- **Embed** text, numeric, and categorical data into a single fusion vector.
+- **Compute** similarity or distance between fused vectors.
+- **Easily** integrate with real databases or pure JSON data for advanced search and analysis.
+
 ## Introduction
 
 Many modern applications require **embedding** diverse data (text, numeric, categorical, etc.) into a **single vector**—often referred to as a **fusion vector**. This unified representation enables advanced similarity searches, recommendations, and analytics over heterogeneous data sources.
@@ -55,20 +61,20 @@ Below is a **high-level overview** of each main file and its responsibility.
 - **Purpose**: The **fusion logic**.
 - **Key Class**: `EmbeddingOrchestrator` takes a record (dict), consults `field_type_map` to decide which embedder to use for each field, and **concatenates** the results into one fused vector.
 
-### 5. `fusion_result.py`
+### 5. `fusion_result.py` (Newly Refactored)
 
-- **Purpose**: Holds the **result** of the fusion process:
+- **Purpose**: Holds the **result** of the fusion process, now encapsulated in a dedicated class:
   - `original_data`: The original dict/JSON object.
   - `component_embeddings`: A per-field map of embeddings.
   - `fusion_embedding`: The final fused vector.
 
-### 6. `similarity.py`
+### 6. `similarity.py` (Refined)
 
 - **Purpose**: Houses **distance** and **similarity** methods:
   - `calc_euclidean()`
   - `calc_manhattan()`
   - `calc_cosine()`
-- **Usage**: Compare two fused vectors (e.g., from two records).
+- **New**: Internal `_ensure_same_length()` method checks that both vectors are of the same length before computing similarities, preventing runtime errors.
 
 ### 7. `main.py`
 
@@ -138,11 +144,3 @@ sequenceDiagram
    ```
    - This will embed your user data (or any JSON objects) and print both partial embeddings and final fused vectors.
    - You can also see distance/similarity calculations for demonstration.
-
----
-
-**That’s it!** You now have a flexible, multi-modal embedding system that can:
-
-- **Embed** text, numeric, and categorical data into a single fusion vector.
-- **Compute** similarity or distance between fused vectors.
-- **Easily** integrate with real databases or pure JSON data for advanced search and analysis.

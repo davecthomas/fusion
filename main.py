@@ -8,11 +8,12 @@ import pandas as pd
 
 from appconfig import AppConfig
 
-# from database import TheDatabase
+from database import TheDatabase
 from embedding import (
     EmbeddingFactory,
     NumericEmbedder,
     CategoryEmbedder,
+    BooleanEmbedder,
 )
 from embedding_orchestrator import EmbeddingOrchestrator
 from fusion_result import FusionResult
@@ -65,9 +66,107 @@ class UserState:
 ###############################################################################
 #                           MAIN TEST LOGIC
 ###############################################################################
+import pandas as pd
+from similarity import Similarity
 
 
-def main():
+def compute_similarity_dataframes(list_fr_results, id_key: str = "user_id"):
+    """
+    Given a list of FusionResult objects, computes pairwise Euclidean distance,
+    Manhattan distance, and Cosine similarity. Returns a tuple of 4 dataframes:
+      (df_euclid, df_manhattan, df_cosine, df_all)
+
+    :param list_fr_results: A list of FusionResult objects
+    :param id_key: The key in original_data used to identify each record (default 'user_id').
+                   If missing, we fall back to 'record_{index}'.
+
+    Example usage:
+        df_euclid, df_manhattan, df_cosine, df_all = compute_similarity_dataframes(results)
+    """
+    sim = Similarity()
+
+    list_dict_euclid = []
+    list_dict_manhattan = []
+    list_dict_cosine = []
+
+    # 1) Pairwise similarity for i < j
+    for i in range(len(list_fr_results)):
+        for j in range(i + 1, len(list_fr_results)):
+            fr_i = list_fr_results[i]
+            fr_j = list_fr_results[j]
+
+            # Use user_id or a fallback
+            record_id_i = fr_i.original_data.get(id_key, f"record_{i+1}")
+            record_id_j = fr_j.original_data.get(id_key, f"record_{j+1}")
+
+            vec_i = fr_i.fusion_embedding
+            vec_j = fr_j.fusion_embedding
+
+            # Calculate distances/similarities
+            dist_euclid = sim.calc_euclidean(vec_i, vec_j)
+            dist_manhattan = sim.calc_manhattan(vec_i, vec_j)
+            sim_cosine_val = sim.calc_cosine(vec_i, vec_j)
+
+            # Append to each list
+            list_dict_euclid.append(
+                {
+                    "record_a": record_id_i,
+                    "record_b": record_id_j,
+                    "euclidean": dist_euclid,
+                }
+            )
+            list_dict_manhattan.append(
+                {
+                    "record_a": record_id_i,
+                    "record_b": record_id_j,
+                    "manhattan": dist_manhattan,
+                }
+            )
+            list_dict_cosine.append(
+                {
+                    "record_a": record_id_i,
+                    "record_b": record_id_j,
+                    "cosine_similarity": sim_cosine_val,
+                }
+            )
+
+    # 2) Create DataFrames
+    df_euclid = pd.DataFrame(list_dict_euclid)
+    df_manhattan = pd.DataFrame(list_dict_manhattan)
+    df_cosine = pd.DataFrame(list_dict_cosine)
+
+    # 3) Normalize distances (optional) and rename for clarity
+    if not df_euclid.empty:
+        max_euclid = df_euclid["euclidean"].max()
+        df_euclid["euclid_score"] = 1 - (df_euclid["euclidean"] / max_euclid)
+
+    if not df_manhattan.empty:
+        max_manhattan = df_manhattan["manhattan"].max()
+        df_manhattan["manhattan_score"] = 1 - (
+            df_manhattan["manhattan"] / max_manhattan
+        )
+
+    if not df_cosine.empty:
+        # Cosine similarity in [-1, 1] → [0, 1]
+        df_cosine["cosine_score"] = (df_cosine["cosine_similarity"] + 1) / 2.0
+
+    # 4) Merge into a single combined dataframe
+    df_merged = df_euclid.merge(
+        df_manhattan[["record_a", "record_b", "manhattan", "manhattan_score"]],
+        on=["record_a", "record_b"],
+        how="outer",
+    )
+    df_all = df_merged.merge(
+        df_cosine[["record_a", "record_b", "cosine_similarity", "cosine_score"]],
+        on=["record_a", "record_b"],
+        how="outer",
+    )
+
+    # Return all 4 DataFrames so the caller can save or inspect as needed
+    return (df_euclid, df_manhattan, df_cosine, df_all)
+
+
+def test_dummy_user_state_dictionaries():
     # 1) Load environment config (useful for actual text embeddings with OpenAI/Hugging Face).
     ac_config = AppConfig(".env")
 
@@ -428,95 +527,106 @@ def main():
         )
         print()
 
-    # 10) Perform pairwise similarity comparisons if desired
-    sim = Similarity()
-    list_dict_euclid = []
-    list_dict_manhattan = []
-    list_dict_cosine = []
-
-    # Compare each fusion vector against every other (i < j to avoid duplicates)
-    for i in range(len(list_fr_results)):
-        for j in range(i + 1, len(list_fr_results)):
-            fr_i = list_fr_results[i]
-            fr_j = list_fr_results[j]
-            user_id_i = fr_i.original_data["user_id"]
-            user_id_j = fr_j.original_data["user_id"]
-
-            # Calculate distances/similarities
-            dist_euclid = sim.calc_euclidean(
-                fr_i.fusion_embedding, fr_j.fusion_embedding
-            )
-            dist_manhattan = sim.calc_manhattan(
-                fr_i.fusion_embedding, fr_j.fusion_embedding
-            )
-            sim_cosine = sim.calc_cosine(fr_i.fusion_embedding, fr_j.fusion_embedding)
-
-            # Append each metric to its corresponding list of dicts
-            list_dict_euclid.append(
-                {
-                    "user_id_a": user_id_i,
-                    "user_id_b": user_id_j,
-                    "euclidean": dist_euclid,
-                }
-            )
-            list_dict_manhattan.append(
-                {
-                    "user_id_a": user_id_i,
-                    "user_id_b": user_id_j,
-                    "manhattan": dist_manhattan,
-                }
-            )
-            list_dict_cosine.append(
-                {
-                    "user_id_a": user_id_i,
-                    "user_id_b": user_id_j,
-                    "cosine_similarity": sim_cosine,
-                }
-            )
-
-    # Create a DataFrame for each similarity algorithm
-    df_euclid = pd.DataFrame(list_dict_euclid)
-    df_manhattan = pd.DataFrame(list_dict_manhattan)
-    df_cosine = pd.DataFrame(list_dict_cosine)
-
-    # Normalize Euclidean distance (0 = farthest, 1 = closest)
-    if not df_euclid.empty:
-        max_euclid = df_euclid["euclidean"].max()
-        df_euclid["similarity_score"] = 1 - (df_euclid["euclidean"] / max_euclid)
-        # df_euclid = df_euclid.sort_values("similarity_score", ascending=False)
-
-    # Normalize Manhattan distance (0 = farthest, 1 = closest)
-    if not df_manhattan.empty:
-        max_manhattan = df_manhattan["manhattan"].max()
-        df_manhattan["similarity_score"] = 1 - (
-            df_manhattan["manhattan"] / max_manhattan
-        )
-        # df_manhattan = df_manhattan.sort_values("similarity_score", ascending=False)
-
-    # Normalize cosine similarity (already in [-1, 1], map to [0, 1])
-    df_cosine["similarity_score"] = (df_cosine["cosine_similarity"] + 1) / 2.0
-    # df_cosine = df_cosine.sort_values("similarity_score", ascending=False)
-
-    # Rename similarity_score columns to avoid overlap
-    df_euclid.rename(columns={"similarity_score": "euclid_score"}, inplace=True)
-    df_manhattan.rename(columns={"similarity_score": "manhattan_score"}, inplace=True)
-    df_cosine.rename(columns={"similarity_score": "cosine_score"}, inplace=True)
-
-    # Merge all three dataframes
-    df_merged = df_euclid.merge(
-        df_manhattan[["user_id_a", "user_id_b", "manhattan", "manhattan_score"]],
-        on=["user_id_a", "user_id_b"],
-        how="outer",
-    )
-    df_all = df_merged.merge(
-        df_cosine[["user_id_a", "user_id_b", "cosine_similarity", "cosine_score"]],
-        on=["user_id_a", "user_id_b"],
-        how="outer",
+    (df_euclid, df_manhattan, df_cosine, df_all) = compute_similarity_dataframes(
+        list_fr_results,
+        id_key="user_id",  # or the field you want to use as an identifier
     )
 
     # Save the merged dataframe to CSV
     df_all.to_csv("combined_similarity.csv", index=False)
 
 
+def test_database():
+    import pandas as pd
+    from similarity import Similarity
+
+    config = AppConfig()
+    db = TheDatabase(config)
+
+    # Get schema info for dynamic inclusion
+    schema_info = db.get_schema_info(None)
+    included_cols = list(schema_info.keys())
+
+    # Exclude certain columns from embedding
+    excluded_from_embedding = ["USER_UUID"]
+
+    # Fetch limited rows
+    records = db.get_records(None, 10)
+    filtered_records = [
+        {k: v for k, v in row.items() if k in included_cols} for row in records
+    ]
+
+    # Instantiate embedders, including the new BooleanEmbedder
+    numeric_embedder = NumericEmbedder(0, 100)
+    category_embedder = CategoryEmbedder(["sample_cat_1", "sample_cat_2"])
+    text_embedder = EmbeddingFactory.create_text_embedder(
+        {
+            "provider": config.OPENAI_PROVIDER,
+            "api_key": config.OPENAI_API_KEY,
+            "model_name": config.OPENAI_MODEL_NAME,
+        }
+    )
+
+    from embedding import BooleanEmbedder
+
+    bool_embedder = BooleanEmbedder()
+
+    # Build an embedder map
+    embedder_map = {
+        "numeric": numeric_embedder,
+        "category": category_embedder,
+        "text": text_embedder,
+        "bool": bool_embedder,
+    }
+
+    # Build field_type_map from schema, based on Snowflake data types
+    field_type_map = {}
+    for col_name, data_type in schema_info.items():
+        data_type = data_type.upper()
+
+        # 1) Numeric
+        if any(x in data_type for x in ["NUMBER", "INT", "FLOAT", "DECIMAL"]):
+            field_type_map[col_name] = "numeric"
+
+        # 2) Text
+        elif any(x in data_type for x in ["VARCHAR", "TEXT", "CHAR"]):
+            field_type_map[col_name] = "text"
+
+        # 3) Boolean
+        elif "BOOLEAN" in data_type:
+            field_type_map[col_name] = "bool"
+
+        # 4) Fallback to text by default
+        else:
+            field_type_map[col_name] = "text"
+
+    orchestrator = EmbeddingOrchestrator(
+        embedder_map=embedder_map,
+        field_type_map=field_type_map,
+        default_type="text",
+        list_no_embed_fields=excluded_from_embedding,
+    )
+
+    # 1) Embed each record and store the FusionResult in a list
+    list_fr_results = []
+    for row_data in filtered_records:
+        result = orchestrator.generate_embedding(row_data)
+        list_fr_results.append(result)
+        print("Original:", result.original_data)
+        print("Embeddings:", result.component_embeddings)
+        print("Fusion:", result.fusion_embedding)
+        print()
+
+    (df_euclid, df_manhattan, df_cosine, df_all) = compute_similarity_dataframes(
+        list_fr_results,
+        id_key="USER_UUID",  # or the field you want to use as an identifier
+    )
+
+    # 5) Save to CSV
+    df_all.to_csv("db_combined_similarity.csv", index=False)
+    print("\nSimilarity metrics saved to db_combined_similarity.csv\n")
+
+
 if __name__ == "__main__":
-    main()
+    # test_dummy_user_state_dictionaries()
+    test_database()

@@ -29,3 +29,4 @@ class AppConfig:
         self.SNOWFLAKE_WAREHOUSE = os.getenv("SNOWFLAKE_WAREHOUSE", "")
         self.SNOWFLAKE_DATABASE = os.getenv("SNOWFLAKE_DATABASE", "")
         self.SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "")
+        self.DEFAULT_TABLE_NAME = os.getenv("DEFAULT_TABLE_NAME", "default_table")

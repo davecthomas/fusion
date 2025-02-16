@@ -29,6 +29,7 @@ class TheDatabase:
         Return a dictionary of {column_name: data_type} for the given table
         by querying Snowflake's information schema.
         """
+        # 1) Build the query
         query = f"""
         SELECT COLUMN_NAME, DATA_TYPE
         FROM INFORMATION_SCHEMA.COLUMNS
@@ -37,11 +38,20 @@ class TheDatabase:
           AND TABLE_CATALOG = '{self.config.SNOWFLAKE_DATABASE.upper()}'
         ORDER BY ORDINAL_POSITION
         """
-        cursor = self.conn.cursor()
-        cursor.execute(query)
-        results = cursor.fetchall()
-        cursor.close()
 
+        # 2) Execute the needed 'USE' statements + the query
+        cursor = self.conn.cursor()
+        try:
+            # Explicitly tell Snowflake which DB and schema to use
+            cursor.execute(f"USE DATABASE {self.config.SNOWFLAKE_DATABASE}")
+            cursor.execute(f"USE SCHEMA {self.config.SNOWFLAKE_SCHEMA}")
+
+            cursor.execute(query)
+            results = cursor.fetchall()
+        finally:
+            cursor.close()
+
+        # 3) Build the column map
         col_map = {}
         for row in results:
             col_name, data_type = row
@@ -49,11 +59,14 @@ class TheDatabase:
 
         return col_map
 
-    def get_records(self, table_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_records(
+        self, table_name: str = None, limit: int = 10
+    ) -> List[Dict[str, Any]]:
         """
         Fetch actual data records from the specified table, up to 'limit' rows.
         Returns a list of dictionaries, one per row, with column_name -> value.
         """
+        table_name = table_name or self.config.DEFAULT_TABLE_NAME
         query = f"""
         SELECT *
         FROM {self.config.SNOWFLAKE_SCHEMA}.{table_name}
